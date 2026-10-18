@@ -13,10 +13,11 @@ class ClothingItemSerializer(serializers.ModelSerializer):
             'category',
             'category_display',
             'image',
+            'processed_image',
             'brand',
             'color',
             'price',
             'created_at',
         ]
         # El usuario no se pasa a mano en el JSON; lo asignará el servidor automáticamente
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'processed_image', 'created_at']
