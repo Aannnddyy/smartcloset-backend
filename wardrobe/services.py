@@ -4,28 +4,29 @@ from rembg import remove
 from django.core.files.base import ContentFile
 
 def remove_background_and_crop(image_field) -> ContentFile:
+    if hasattr(image_field, 'open'):
+        image_field.open()
 
-    # 1. Leemos los bytes del archivo original
     image_field.seek(0)
     input_bytes = image_field.read()
 
-    # 2. rembg elimina el fondo devolviendo bytes con canal alfa (RGBA)
+    if not input_bytes:
+        return None
+
+    # 1. Eliminación de fondo con rembg directamente sobre los bytes originales
     output_bytes = remove(input_bytes)
 
-    # 3. Abrimos el resultado con Pillow para recortar márgenes vacíos
-    image = Image.open(io.BytesIO(output_bytes))
-    image = image.convert("RGBA")
-
-    # getbbox() calcula la caja que encierra los píxeles visibles (no transparentes)
+    # 2. Apertura en Pillow para recortar espacios transparentes
+    image = Image.open(io.BytesIO(output_bytes)).convert("RGBA")
     bounding_box = image.getbbox()
     if bounding_box:
         image = image.crop(bounding_box)
 
-    # 4. Guardamos la imagen en memoria en formato PNG para mantener la transparencia
+    # 3. Guardado final en PNG transparente
     buffer = io.BytesIO()
     image.save(buffer, format="PNG", optimize=True)
     buffer.seek(0)
 
-    # 5. Generamos el archivo de Django a partir del buffer
-    filename = f"processed_{image_field.name.split('/')[-1].split('.')[0]}.png"
+    original_name = image_field.name.split('/')[-1].split('.')[0]
+    filename = f"processed_{original_name}.png"
     return ContentFile(buffer.getvalue(), name=filename)
