@@ -38,3 +38,12 @@ class ClothingItemSerializer(serializers.ModelSerializer):
                 )
 
             return value
+
+# Actúa como un formulario de validación puro en memoria
+class ClothingItemFromURLSerializer(serializers.Serializer):
+    url = serializers.URLField(required=True)
+    name = serializers.CharField(max_length=100, required=True)
+    category = serializers.ChoiceField(choices=ClothingItem.Category.choices, required=True)
+    brand = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    color = serializers.CharField(max_length=30, required=False, allow_blank=True)
+    price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=0.00)
