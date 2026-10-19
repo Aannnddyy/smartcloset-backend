@@ -31,3 +31,5 @@ sqlparse==0.6.0
 tifffile==2026.10.15
 tqdm==4.70.1
 urllib3==2.8.0
+django-filter
+beautifulsoup4
