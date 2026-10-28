@@ -1,5 +1,4 @@
 import io
-import re
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
@@ -16,21 +15,14 @@ COMMON_HEADERS = {
     'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
 }
 
-# Sesión ligera con u2netp para evitar saturar la CPU del Mac
 SESSION_REMBG = new_session(model_name="u2netp")
 
 
 def remove_background_and_crop(image_field, max_size=(800, 800)) -> ContentFile:
-    """
-    Reduce tamaño de imagen, remueve fondo con sesión ligera u2netp
-    y recorta los bordes transparentes sobrantes.
-    """
     if hasattr(image_field, 'open'):
         image_field.open()
 
     image_field.seek(0)
-
-    # 1. Reducción proporcional previa con Pillow
     img = Image.open(image_field)
     img.thumbnail(max_size, Image.Resampling.LANCZOS)
 
@@ -38,16 +30,13 @@ def remove_background_and_crop(image_field, max_size=(800, 800)) -> ContentFile:
     img.save(temp_buffer, format="PNG")
     temp_buffer.seek(0)
 
-    # 2. Eliminación de fondo reutilizando la sesión optimizada
     output_bytes = remove(temp_buffer.getvalue(), session=SESSION_REMBG)
 
-    # 3. Recorte automático a los límites reales de la prenda
     processed_img = Image.open(io.BytesIO(output_bytes)).convert("RGBA")
     bounding_box = processed_img.getbbox()
     if bounding_box:
         processed_img = processed_img.crop(bounding_box)
 
-    # 4. Guardado final optimizado
     final_buffer = io.BytesIO()
     processed_img.save(final_buffer, format="PNG", optimize=True)
     final_buffer.seek(0)
@@ -58,9 +47,6 @@ def remove_background_and_crop(image_field, max_size=(800, 800)) -> ContentFile:
 
 
 def download_image_from_url(image_url: str) -> ContentFile:
-    """
-    Descarga una imagen desde su URL directa y la devuelve como ContentFile de Django.
-    """
     response = requests.get(image_url, headers=COMMON_HEADERS, timeout=15)
     response.raise_for_status()
 
@@ -76,31 +62,21 @@ def download_image_from_url(image_url: str) -> ContentFile:
 
 
 def clean_and_deduplicate_urls(raw_urls: list) -> list:
-    """
-    Agrupa imágenes por su identificador base, elimina resoluciones intermedias
-    y descarta miniaturas pequeñas (w < 400).
-    """
     unique_images = {}
+    width_param_names = ['w', 'wid', 'width', 'imwidth', 'size']
 
     for url in raw_urls:
         parsed = urlparse(url)
         params = parse_qs(parsed.query)
 
-        # Si incluye parámetro de anchura (w=...), filtramos miniaturas
-        if 'w' in params:
-            try:
-                width = int(params['w'][0])
-                if width < 400:
-                    continue
-            except ValueError:
-                pass
+        detected_width_param = None
+        for wp in width_param_names:
+            if wp in params:
+                detected_width_param = wp
+                break
 
-        # Obtenemos la ruta base sin query params para agrupar duplicados
-        base_path = parsed.path
-
-        # En Zara y otros CDNs, forzamos la versión en alta resolución (w=2048)
-        if 'w' in params:
-            params['w'] = ['2048']
+        if detected_width_param:
+            params[detected_width_param] = ['1800']
             clean_query = urlencode(params, doseq=True)
             normalized_url = urlunparse((
                 parsed.scheme,
@@ -113,8 +89,12 @@ def clean_and_deduplicate_urls(raw_urls: list) -> list:
         else:
             normalized_url = url
 
-        # Guardamos usando la ruta base como clave para no repetir la misma toma
-        if base_path not in unique_images:
+        base_path = parsed.path
+
+        if base_path in unique_images:
+            if 'packshot' in normalized_url and 'packshot' not in unique_images[base_path]:
+                unique_images[base_path] = normalized_url
+        else:
             unique_images[base_path] = normalized_url
 
     return list(unique_images.values())
@@ -126,7 +106,7 @@ def extract_product_preview(product_url: str) -> dict:
     ignored_keywords = [
         'logo', 'icon', 'pixel', 'avatar', 'badge', 'banner',
         'rating', 'star', 'arrow', 'payment', 'footer', 'header',
-        'cart', 'bag', 'heart', 'flag'
+        'cart', 'bag', 'heart', 'flag', 'chip', 'swatch', 'placeholder'
     ]
 
     valid_extensions = ['.jpg', '.jpeg', '.webp', '.png', '.avif']
@@ -155,12 +135,11 @@ def extract_product_preview(product_url: str) -> dict:
             page.goto(product_url, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(2000)
 
-            # Scroll progresivo para asegurar la carga completa de fotos traseras y de detalle
             page.evaluate("""
                 async () => {
-                    for (let i = 0; i < 5; i++) {
-                        window.scrollBy(0, 1000);
-                        await new Promise(r => setTimeout(r, 400));
+                    for (let i = 0; i < 4; i++) {
+                        window.scrollBy(0, 800);
+                        await new Promise(r => setTimeout(r, 300));
                     }
                 }
             """)
@@ -175,7 +154,8 @@ def extract_product_preview(product_url: str) -> dict:
             raw_sources = page.evaluate("""
                 () => {
                     const urls = [];
-                    document.querySelectorAll('img, picture source, source').forEach(el => {
+                    const root = document.querySelector('main') || document.body;
+                    root.querySelectorAll('img, picture source, source').forEach(el => {
                         const src = el.getAttribute('src') 
                             || el.getAttribute('data-src') 
                             || el.getAttribute('data-original') 
@@ -201,7 +181,10 @@ def extract_product_preview(product_url: str) -> dict:
 
                 target_lower = target.lower()
                 has_format = any(ext in target_lower for ext in valid_extensions)
-                is_cdn = any(term in target_lower for term in ['/image', '/foto', '/product', 'cdn', 'media', 'static'])
+                is_cdn = any(term in target_lower for term in [
+                    '/image', '/foto', '/product', 'cdn', 'media', 
+                    'static', 'ztat.net', 'uniqlo.com'
+                ])
                 is_ignored = any(kw in target_lower for kw in ignored_keywords)
 
                 if (has_format or is_cdn) and not is_ignored and target.startswith('http'):
