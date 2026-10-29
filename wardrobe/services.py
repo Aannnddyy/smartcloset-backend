@@ -1,26 +1,28 @@
 import io
-import json
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
-from bs4 import BeautifulSoup
 from django.core.files.base import ContentFile
 from PIL import Image
-from rembg import remove
+from playwright.sync_api import sync_playwright
+from rembg import new_session, remove
+
+COMMON_HEADERS = {
+    'User-Agent': (
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+    ),
+    'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+}
+
+SESSION_REMBG = new_session(model_name="u2netp")
 
 
 def remove_background_and_crop(image_field, max_size=(800, 800)) -> ContentFile:
-    """
-    Recibe un archivo de imagen, reduce su resolución máxima con Pillow para acelerar
-    el procesamiento, elimina el fondo con rembg, recorta el espacio transparente sobrante
-    y devuelve un ContentFile en formato PNG transparente.
-    """
     if hasattr(image_field, 'open'):
         image_field.open()
 
     image_field.seek(0)
-
-    # 1. Reducción previa de escala para evitar bloqueos y timeouts de CPU
     img = Image.open(image_field)
     img.thumbnail(max_size, Image.Resampling.LANCZOS)
 
@@ -28,16 +30,13 @@ def remove_background_and_crop(image_field, max_size=(800, 800)) -> ContentFile:
     img.save(temp_buffer, format="PNG")
     temp_buffer.seek(0)
 
-    # 2. Eliminación de fondo con rembg
-    output_bytes = remove(temp_buffer.getvalue())
+    output_bytes = remove(temp_buffer.getvalue(), session=SESSION_REMBG)
 
-    # 3. Recorte automático del espacio transparente sobrante
     processed_img = Image.open(io.BytesIO(output_bytes)).convert("RGBA")
     bounding_box = processed_img.getbbox()
     if bounding_box:
         processed_img = processed_img.crop(bounding_box)
 
-    # 4. Generación del ContentFile final
     final_buffer = io.BytesIO()
     processed_img.save(final_buffer, format="PNG", optimize=True)
     final_buffer.seek(0)
@@ -47,76 +46,159 @@ def remove_background_and_crop(image_field, max_size=(800, 800)) -> ContentFile:
     return ContentFile(final_buffer.getvalue(), name=filename)
 
 
-def extract_image_from_url(target_url: str) -> ContentFile:
-    """
-    Descarga una imagen tanto si se pasa la URL directa del archivo (o CDN como Zara)
-    como si se pasa el enlace de una tienda estándar con etiquetas OpenGraph/Twitter Cards/JSON-LD.
-    """
-    headers = {
-        'User-Agent': (
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
-            'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
-        ),
-        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-    }
+def download_image_from_url(image_url: str) -> ContentFile:
+    response = requests.get(image_url, headers=COMMON_HEADERS, timeout=15)
+    response.raise_for_status()
 
-    parsed = urlparse(target_url)
-    clean_path = parsed.path.lower()
-    
-    # Comprobación de si es enlace directo o CDN estático
-    is_direct_image = (
-        any(clean_path.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.webp', '.avif'])
-        or 'static.zara.net' in parsed.netloc
-    )
+    parsed_path = urlparse(image_url).path
+    filename = parsed_path.split('/')[-1]
 
-    image_url = target_url if is_direct_image else None
+    if not filename or '.' not in filename:
+        filename = "garment_item.jpg"
+    elif '?' in filename:
+        filename = filename.split('?')[0]
 
-    # Si es una página web tradicional, parseamos el HTML
-    if not image_url:
-        response = requests.get(target_url, headers=headers, timeout=10)
-        response.raise_for_status()
+    return ContentFile(response.content, name=filename)
 
-        soup = BeautifulSoup(response.text, 'html.parser')
 
-        # 1. Metadatos OpenGraph / Twitter Cards
-        og_image = (
-            soup.find('meta', property='og:image')
-            or soup.find('meta', property='og:image:secure_url')
-            or soup.find('meta', attrs={'name': 'twitter:image'})
-            or soup.find('meta', attrs={'name': 'twitter:image:src'})
-            or soup.find('link', rel='image_src')
+def clean_and_deduplicate_urls(raw_urls: list) -> list:
+    unique_images = {}
+    width_param_names = ['w', 'wid', 'width', 'imwidth', 'size']
+
+    for url in raw_urls:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+
+        detected_width_param = None
+        for wp in width_param_names:
+            if wp in params:
+                detected_width_param = wp
+                break
+
+        if detected_width_param:
+            params[detected_width_param] = ['1800']
+            clean_query = urlencode(params, doseq=True)
+            normalized_url = urlunparse((
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                parsed.params,
+                clean_query,
+                parsed.fragment
+            ))
+        else:
+            normalized_url = url
+
+        base_path = parsed.path
+
+        if base_path in unique_images:
+            if 'packshot' in normalized_url and 'packshot' not in unique_images[base_path]:
+                unique_images[base_path] = normalized_url
+        else:
+            unique_images[base_path] = normalized_url
+
+    return list(unique_images.values())
+
+
+def extract_product_preview(product_url: str) -> dict:
+    title_hint = ""
+
+    ignored_keywords = [
+        'logo', 'icon', 'pixel', 'avatar', 'badge', 'banner',
+        'rating', 'star', 'arrow', 'payment', 'footer', 'header',
+        'cart', 'bag', 'heart', 'flag', 'chip', 'swatch', 'placeholder'
+    ]
+
+    valid_extensions = ['.jpg', '.jpeg', '.webp', '.png', '.avif']
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            channel="chrome",
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+            ]
         )
 
-        if og_image:
-            image_url = og_image.get('content') or og_image.get('href')
+        context = browser.new_context(
+            user_agent=COMMON_HEADERS['User-Agent'],
+            locale="es-ES",
+            viewport={"width": 1440, "height": 900}
+        )
 
-        # 2. Fallback a Schema.org / JSON-LD
-        if not image_url:
-            for script in soup.find_all('script', type='application/ld+json'):
-                try:
-                    data = json.loads(script.string or '')
-                    items = data if isinstance(data, list) else [data]
-                    for item in items:
-                        if 'image' in item:
-                            img = item['image']
-                            image_url = img if isinstance(img, str) else (img[0] if isinstance(img, list) else None)
-                            if image_url:
-                                break
-                    if image_url:
-                        break
-                except (json.JSONDecodeError, TypeError):
-                    continue
+        page = context.new_page()
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-    if not image_url:
-        raise ValueError("No se pudo obtener la imagen del enlace facilitado.")
+        try:
+            page.goto(product_url, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(2000)
 
-    # Descarga del archivo binario
-    img_response = requests.get(image_url, headers=headers, timeout=12)
-    img_response.raise_for_status()
+            page.evaluate("""
+                async () => {
+                    for (let i = 0; i < 4; i++) {
+                        window.scrollBy(0, 800);
+                        await new Promise(r => setTimeout(r, 300));
+                    }
+                }
+            """)
+            page.wait_for_timeout(1000)
 
-    clean_img_path = urlparse(image_url).path
-    filename = clean_img_path.split('/')[-1]
-    if not filename or '.' not in filename:
-        filename = "imported_item.jpg"
+            title_hint = page.title()
+            for sep in ['|', '-', '—', '•']:
+                if sep in title_hint:
+                    title_hint = title_hint.split(sep)[0].strip()
+                    break
 
-    return ContentFile(img_response.content, name=filename)
+            raw_sources = page.evaluate("""
+                () => {
+                    const urls = [];
+                    const root = document.querySelector('main') || document.body;
+                    root.querySelectorAll('img, picture source, source').forEach(el => {
+                        const src = el.getAttribute('src') 
+                            || el.getAttribute('data-src') 
+                            || el.getAttribute('data-original') 
+                            || el.getAttribute('srcset')
+                            || el.getAttribute('data-srcset');
+                        if (src) urls.push(src);
+                    });
+                    return urls;
+                }
+            """)
+
+            filtered_sources = []
+            for raw in raw_sources:
+                target = raw
+
+                if ',' in target:
+                    target = target.split(',')[-1].strip().split(' ')[0]
+                elif ' ' in target:
+                    target = target.strip().split(' ')[0]
+
+                if target.startswith('//'):
+                    target = f"https:{target}"
+
+                target_lower = target.lower()
+                has_format = any(ext in target_lower for ext in valid_extensions)
+                is_cdn = any(term in target_lower for term in [
+                    '/image', '/foto', '/product', 'cdn', 'media', 
+                    'static', 'ztat.net', 'uniqlo.com'
+                ])
+                is_ignored = any(kw in target_lower for kw in ignored_keywords)
+
+                if (has_format or is_cdn) and not is_ignored and target.startswith('http'):
+                    filtered_sources.append(target)
+
+            candidates = clean_and_deduplicate_urls(filtered_sources)
+
+        finally:
+            browser.close()
+
+    if not candidates:
+        raise ValueError("No se encontraron imágenes en el producto facilitado.")
+
+    return {
+        "title_hint": title_hint,
+        "images": candidates[:15]
+    }
