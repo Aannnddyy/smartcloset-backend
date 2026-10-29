@@ -24,6 +24,7 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path('api/', include('wardrobe.urls')),
     path('api-auth/', include('rest_framework.urls')),  # Para poder iniciar sesión en la interfaz web de la API
+    path('api/outfits/', include('outfits.urls')),
 ]
 # Permite servir las fotos subidas en desarrollo local
 if settings.DEBUG:
