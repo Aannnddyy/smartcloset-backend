@@ -2,21 +2,27 @@
 
 Backend for personal wardrobe digitization and management built with Python and Django REST Framework.
 
-The platform eliminates the primary friction point of digital wardrobe apps: manually photographing and cropping individual garments. It automates clothing ingestion through a two-step headless browser pipeline (URL preview -> user selection) and AI-assisted segmentation to generate clean, transparent catalog cutouts ready for outfit generation.
+The platform eliminates the primary friction point of digital wardrobe apps: manually photographing and cropping individual garments. It automates clothing ingestion through a two-step headless browser pipeline (URL preview -> user selection) and AI-assisted segmentation to generate clean, transparent catalog cutouts ready for outfit generation and cataloging.
 
 ## Project Status
 
 The backend is currently in active development.
 
 Implemented features:
-- Modular RESTful API architecture with complete CRUD endpoints for clothing items.
-- User data isolation via `request.user` and permission controls across endpoints.
-- Two-step store ingestion flow:
+- **Modular RESTful Architecture**: Independent domain apps (`wardrobe` and `outfits`) with dedicated routers and serializers.
+- **Strict Data Isolation**: Multi-tenant user segmentation via `request.user` across all querysets, serializer validations, and permissions.
+- **Two-Step Store Ingestion Flow**:
   1. Headless browser preview extraction (`Playwright`) supporting dynamic client-side rendering (SPA), anti-bot evasion (Akamai/CDN), progressive lazy-loading scroll, and high-resolution media deduplication.
   2. Targeted multi-angle garment import (front view and optional back view).
-- Computer vision pipeline: resolution optimization with `Pillow` (LANCZOS downsampling), automated background removal using `rembg` (`u2netp` portable model with persistent CPU-optimized session), and tight bounding-box autocropping.
-- Dual perspective support: handles both front and back views per garment with automated transparency processing.
-- Quad-image storage handling: preserves original source files and transparent PNG assets for both perspectives.
+- **Computer Vision Pipeline**: Resolution optimization with `Pillow` (LANCZOS downsampling), automated background removal using `rembg` (`u2netp` portable model with persistent CPU-optimized session), and tight bounding-box autocropping.
+- **Dual Perspective Support**: Handles both front and back views per garment with automated transparency processing.
+- **Quad-Image Storage Handling**: Preserves original source files and transparent PNG assets for both perspectives.
+- **Outfit Composition & Management**:
+  - `Outfit` model supporting Many-to-Many relationships to user-owned `ClothingItem` instances.
+  - Granular ownership verification preventing cross-user item contamination.
+  - Read/write serializer decoupling (`clothes_ids` for ingestion, nested `ClothingItemSerializer` for retrieval).
+  - Database query optimization using `prefetch_related('clothes')` to eliminate N+1 overhead.
+  - Categorization by season (`Season.choices`) and occasion (`Occasion.choices`) with localized display mappings.
 
 Next steps:
 - Celery and Redis integration to process image segmentation asynchronously in background workers.
@@ -26,13 +32,13 @@ Next steps:
 
 ## Tech Stack
 
-- Language: Python 3.12+
-- Framework: Django 6+
-- API: Django REST Framework
-- Filtering: django-filter
-- Browser Automation & Scraping: Playwright, requests, beautifulsoup4
-- Computer Vision & AI: rembg (`u2netp`), onnxruntime, Pillow
-- Database: SQLite (local development, targeting PostgreSQL for production)
+- **Language**: Python 3.12+ (tested through 3.14)
+- **Framework**: Django 6+
+- **API**: Django REST Framework
+- **Filtering**: django-filter
+- **Browser Automation & Scraping**: Playwright, requests
+- **Computer Vision & AI**: rembg (`u2netp`), onnxruntime, Pillow
+- **Database**: SQLite (local development, targeting PostgreSQL for production)
 
 ## Local Setup
 
@@ -56,10 +62,20 @@ The API will be available at http://127.0.0.1:8000/api/clothes/ and the admin pa
 
 ## Key Endpoints
 
+### Wardrobe (/api/clothes/)
+
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | /api/clothes/ | List authenticated user's clothing items |
 | POST | /api/clothes/ | Upload a clothing item manually (multipart/form-data) |
 | POST | /api/clothes/extract-preview/ | Extract product images and title hint from a store URL via Playwright |
 | POST | /api/clothes/import-url/ | Import selected garment images (front/back), run background removal, and save item |
-| GET / PUT / DELETE | /api/clothes/<id>/ | Retrieve, update, or delete a clothing item |
+| GET / PUT / PATCH / DELETE | /api/clothes/<id>/ | Retrieve, update, partially update, or delete a clothing item |
+
+### Outfits (/api/outfits/)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | /api/outfits/ | List authenticated user's outfits (with preloaded garment details) |
+| POST | /api/outfits/ | Create a new outfit linking existing ClothingItem IDs (clothes_ids) |
+| GET / PUT / PATCH / DELETE | /api/outfits/<id>/ | Retrieve, update, partially update, or delete an outfit |
