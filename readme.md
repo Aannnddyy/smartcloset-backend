@@ -9,8 +9,10 @@ The platform eliminates the primary friction point of digital wardrobe apps: man
 The backend is currently in active development.
 
 Implemented features:
+- **Authentication & Security**: Stateless JWT authentication (`djangorestframework-simplejwt`) with Bearer token validation, automatic token rotation on refresh, and user registration endpoint.
 - **Modular RESTful Architecture**: Independent domain apps (`wardrobe` and `outfits`) with dedicated routers and serializers.
 - **Strict Data Isolation**: Multi-tenant user segmentation via `request.user` across all querysets, serializer validations, and permissions.
+- **Advanced Query Filtering**: Declarative query parameters (`django-filter`) across seasons, occasions, and favorite flags.
 - **Two-Step Store Ingestion Flow**:
   1. Headless browser preview extraction (`Playwright`) supporting dynamic client-side rendering (SPA), anti-bot evasion (Akamai/CDN), progressive lazy-loading scroll, and high-resolution media deduplication.
   2. Targeted multi-angle garment import (front view and optional back view).
@@ -20,6 +22,7 @@ Implemented features:
 - **Outfit Composition & Management**:
   - `Outfit` model supporting Many-to-Many relationships to user-owned `ClothingItem` instances.
   - Granular ownership verification preventing cross-user item contamination.
+  - Custom actions like `toggle-favorite` directly on outfits.
   - Read/write serializer decoupling (`clothes_ids` for ingestion, nested `ClothingItemSerializer` for retrieval).
   - Database query optimization using `prefetch_related('clothes')` to eliminate N+1 overhead.
   - Categorization by season (`Season.choices`) and occasion (`Occasion.choices`) with localized display mappings.
@@ -34,7 +37,7 @@ Next steps:
 
 - **Language**: Python 3.12+ (tested through 3.14)
 - **Framework**: Django 6+
-- **API**: Django REST Framework
+- **API & Auth**: Django REST Framework, djangorestframework-simplejwt
 - **Filtering**: django-filter
 - **Browser Automation & Scraping**: Playwright, requests
 - **Computer Vision & AI**: rembg (`u2netp`), onnxruntime, Pillow
@@ -58,15 +61,23 @@ playwright install chromium
 python manage.py migrate
 python manage.py runserver
 
-The API will be available at http://127.0.0.1:8000/api/clothes/ and the admin panel at http://127.0.0.1:8000/admin/.
+The API will be available at http://127.0.0.1:8000/ and the admin panel at http://127.0.0.1:8000/admin/.
 
 ## Key Endpoints
+
+### Authentication (/api/auth/)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| POST | /api/auth/register/ | Register a new user and receive initial access/refresh JWT tokens |
+| POST | /api/auth/login/ | Authenticate with credentials and obtain access/refresh token pair |
+| POST | /api/auth/refresh/ | Rotate refresh token and obtain a fresh access token |
 
 ### Wardrobe (/api/clothes/)
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | /api/clothes/ | List authenticated user's clothing items |
+| GET | /api/clothes/ | List authenticated user's clothing items (supports filtering by season, category, etc.) |
 | POST | /api/clothes/ | Upload a clothing item manually (multipart/form-data) |
 | POST | /api/clothes/extract-preview/ | Extract product images and title hint from a store URL via Playwright |
 | POST | /api/clothes/import-url/ | Import selected garment images (front/back), run background removal, and save item |
@@ -76,6 +87,7 @@ The API will be available at http://127.0.0.1:8000/api/clothes/ and the admin pa
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | /api/outfits/ | List authenticated user's outfits (with preloaded garment details) |
+| GET | /api/outfits/ | List authenticated user's outfits (with preloaded garment details, supports filters) |
 | POST | /api/outfits/ | Create a new outfit linking existing ClothingItem IDs (clothes_ids) |
 | GET / PUT / PATCH / DELETE | /api/outfits/<id>/ | Retrieve, update, partially update, or delete an outfit |
+| POST | /api/outfits/<id>/toggle-favorite/ | Toggle favorite boolean state for the specified outfit |
