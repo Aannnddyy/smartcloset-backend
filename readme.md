@@ -26,11 +26,18 @@ Implemented features:
   - Read/write serializer decoupling (`clothes_ids` for ingestion, nested `ClothingItemSerializer` for retrieval).
   - Database query optimization using `prefetch_related('clothes')` to eliminate N+1 overhead.
   - Categorization by season (`Season.choices`) and occasion (`Occasion.choices`) with localized display mappings.
+- **Automated Digital Canvas Generator**:
+  - Deterministic visual canvas composition (`OutfitCanvasGenerator` powered by `Pillow`) rendering high-resolution JPEG catalog collages (`1080x1350`).
+  - Proportional category slot mappings (`TOP`, `DRESS`, `OUTERWEAR`, `BOTTOM`, `SHOES`, `ACCESSORY`) with depth layering (`z-index`).
+  - Intelligent torso collision detection: dynamically computes horizontal offsets and proportional downscaling when multiple upper-body items (`TOP` + `DRESS` or multiple tops) compete for the torso zone.
+  - Standardized shoulder and neckline top-alignment ensuring paired tops and dresses render naturally side-by-side without vertical clipping.
+  - Automatic transparent border trimming (`getbbox`) and aspect-ratio preservation via LANCZOS resampling.
 
 Next steps:
+- Containerization with Docker and Docker Compose (Django application server + PostgreSQL).
+- Production database migration from SQLite to PostgreSQL.
 - Celery and Redis integration to process image segmentation asynchronously in background workers.
 - Expand universal store scraping compatibility across non-Inditex retailers (Mango, Nike, ASOS).
-- Digital canvas generator for multi-item outfit composition.
 - LLM styling assistant contextualized with local weather forecasts and personal schedule.
 
 ## Tech Stack
@@ -40,7 +47,7 @@ Next steps:
 - **API & Auth**: Django REST Framework, djangorestframework-simplejwt
 - **Filtering**: django-filter
 - **Browser Automation & Scraping**: Playwright, requests
-- **Computer Vision & AI**: rembg (`u2netp`), onnxruntime, Pillow
+- **Computer Vision & Image Composition**: rembg (`u2netp`), onnxruntime, Pillow
 - **Database**: SQLite (local development, targeting PostgreSQL for production)
 
 ## Local Setup
@@ -88,6 +95,6 @@ The API will be available at http://127.0.0.1:8000/ and the admin panel at http:
 | Method | Endpoint | Description |
 |---|---|---|
 | GET | /api/outfits/ | List authenticated user's outfits (with preloaded garment details, supports filters) |
-| POST | /api/outfits/ | Create a new outfit linking existing ClothingItem IDs (clothes_ids) |
+| POST | /api/outfits/ | Create a new outfit linking existing ClothingItem IDs (clothes_ids) and generate canvas image |
 | GET / PUT / PATCH / DELETE | /api/outfits/<id>/ | Retrieve, update, partially update, or delete an outfit |
 | POST | /api/outfits/<id>/toggle-favorite/ | Toggle favorite boolean state for the specified outfit |
