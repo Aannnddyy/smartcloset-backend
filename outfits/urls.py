@@ -1,7 +1,10 @@
+from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import OutfitViewSet
 
 router = DefaultRouter()
-router.register(r'', OutfitViewSet, basename='outfit')
+router.register(r'outfits', OutfitViewSet, basename='outfit')
 
-urlpatterns = router.urls
+urlpatterns = [
+    path('', include(router.urls)),
+]
