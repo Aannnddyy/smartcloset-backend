@@ -29,6 +29,11 @@ class Outfit(models.Model):
         related_name='outfits',
         blank=False
     )
+    canvas_image = models.ImageField(
+        upload_to='outfits/canvases/%Y/%m/',
+        null=True,
+        blank=True
+    )
     season = models.CharField(
         max_length=20,
         choices=Season.choices,
